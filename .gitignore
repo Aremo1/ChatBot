@@ -1,0 +1,23 @@
+# OS
+node_modules/
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+*.env.local
+
+# Build
+backend/dist/
+frontend/dist/
+
+# Local databases (contain password hashes — never commit)
+*.db
+*.db-wal
+*.db-shm
+
+# Runtime uploads
+backend/uploads/
+
+# Logs
+*.log

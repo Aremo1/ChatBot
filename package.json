@@ -1,0 +1,37 @@
+{
+  "name": "rhosam-chatbot",
+  "version": "1.0.0",
+  "description": "Rhosam ChatBot - Real-time chat app with Google OAuth and Gmail API",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "bash run-all.sh",
+    "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install",
+    "setup:db": "cd backend && npm run setup-db",
+    "build": "npm run build --workspace frontend",
+    "test:api": "npm test --workspace backend",
+    "test:e2e": "node e2e-ui-test.js",
+    "test": "npm run test:api && npm run test:e2e",
+    "lint": "npm run lint --workspace frontend && npm run lint --workspace backend"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "chat",
+    "realtime",
+    "socket.io",
+    "google-oauth",
+    "gmail-api",
+    "react",
+    "express"
+  ],
+  "author": "Rhosam",
+  "license": "MIT",
+  "devDependencies": {
+    "puppeteer-core": "^25.16.0"
+  }
+}
