@@ -228,6 +228,74 @@ The UI is responsive (chat list and conversation swap on small screens)
 and installable: open the app in the browser and use **Install app** (or
 the browser's *Add to Home Screen*).
 
+## Deployment
+
+The app is two separate deploys that talk to each other over HTTPS + Socket.IO:
+
+- **Frontend** — a static Vite build, served from Vercel (or any static host).
+- **Backend** — a Node/Express/Socket.IO service, served from Render, Railway, or any host that can run `node src/index.js`.
+
+They share a single public URL so the PWA can be installed and the Socket.IO
+client can reach the real backend:
+
+1. Deploy the backend first and note its public URL, e.g.
+   `https://chat-api.rhosam.tech`.
+2. Deploy the frontend, set the Vite env variables on the host (not in the
+   repo), and point both at that same backend URL:
+   ```bash
+   VITE_API_URL=https://chat-api.rhosam.tech
+   VITE_SOCKET_URL=https://chat-api.rhosam.tech
+   ```
+   Both variables must use the same value; the REST `fetch` calls and the
+   Socket.IO client both read from them, so a mismatch makes the app connect
+   to the wrong origin.
+
+### Backend (Render / Railway)
+
+- Build command: `cd backend && npm install`
+- Start command: `cd backend && node src/index.js`
+- Set these env variables in the host dashboard (not in the repo —
+  `backend/.env` is gitignored):
+  ```
+  PORT=4000
+  FRONTEND_URL=https://chat.rhosam.tech
+  JWT_SECRET=<a long random secret>
+  DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASSWORD   (or leave SQLite mode
+                                                         as-is for a single
+                                                         free-tier instance)
+  ADMIN_EMAIL / ADMIN_PASSWORD / ADMIN_NAME               (so the admin account
+                                                           is bootstrapped on boot)
+  SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS / EMAIL_FROM
+  ```
+- The server calls `verifyMail()` at boot and logs a loud error if SMTP is
+  misconfigured, so a bad mailbox blocks the deploy from going quiet-fail.
+- Free-tier hosts usually spin the service down after inactivity. The first
+  real request after a cold start can take 30-60 seconds; that is expected for
+  a free instance, not a bug.
+
+### Frontend (Vercel)
+
+- Framework preset: **Vite**.
+- Root directory: `frontend`.
+- Build command: `npm run build` (runs inside `frontend/`).
+- Output directory: `dist/`.
+- Env variables to add in Vercel (prefixed with `VITE_` so Vite bakes them
+  into the build):
+  ```
+  VITE_API_URL=https://chat-api.rhosam.tech
+  VITE_SOCKET_URL=https://chat-api.rhosam.tech
+  ```
+- Add your production domain as a redirect URI in Google Cloud Console once the
+  backend is live, e.g. `https://chat-api.rhosam.tech/api/auth/google/callback`,
+  and update `GOOGLE_REDIRECT_URI` in the backend env.
+
+### Mobile install
+
+Once both are live, open the frontend URL on a phone or desktop. The **Install
+app** button (or the browser's *Add to Home Screen*) installs the PWA; the
+manifest and service worker are already in `frontend/public/`, so no extra
+build step is needed beyond the env variables above.
+
 ## Google Gmail Integration
 
 The app uses the Google Gmail API with OAuth 2.0:
