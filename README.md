@@ -366,16 +366,87 @@ app** button (or the browser's *Add to Home Screen*) installs the PWA; the
 manifest and service worker are already in `frontend/public/`, so no extra
 build step is needed beyond the env variables above.
 
+### Verifying the Google OAuth callback
+
+This is the gate for the same-origin deploy: once the Render service is live,
+serving the frontend from the same origin, and the GOOGLE_* env vars are set,
+exercise the Connect Gmail flow end to end.
+
+**What to do:**
+
+1. Open `https://chatbot-saxe.onrender.com` in a browser and sign in (local
+   sign-in or Google OAuth).
+2. Open the dev tools Network tab.
+3. In the app, start the Gmail connection (the **Connect Gmail** action calls
+   `POST /api/auth/gmail/start-session`).
+4. Confirm the response includes an `authUrl`.
+5. Open that `authUrl` in a new tab and complete the Google consent screen.
+6. After consent, the client should receive an `idToken` and POST it to
+   `/api/auth/google/register` (first time) or `/api/auth/google/login`
+   (returning user).
+7. Confirm the app signs you in / links your Google account and the Gmail
+   connection shows as active.
+
+**Success looks like:** a consent screen that completes, an `idToken` POST
+that returns 200, and the Gmail connection working in the app.
+
+**Failure to watch for:** if the Authorized redirect URI you added to Google
+Cloud Console doesn't match `GOOGLE_REDIRECT_URI` in Render, Google rejects
+the consent redirect with a `redirect_uri_mismatch` error and the flow stops
+at the consent step. In that case: confirm the OAuth client's
+**Authorized redirect URIs** include `https://chatbot-saxe.onrender.com`,
+confirm `GOOGLE_REDIRECT_URI` in Render is exactly
+`https://chatbot-saxe.onrender.com`, and redeploy the Render service so it
+picks up the updated value.
+
+**Local parity:** keep `http://localhost:4000` in the OAuth client's
+Authorized redirect URIs and use `GOOGLE_REDIRECT_URI=http://localhost:4000`
+locally, so the same client works for both dev and production.
+
+### Email delivery notes
+
+Password-reset OTPs and admin-generated passwords are sent through SMTP using
+the `SMTP_*` variables. The production config above points at Gmail
+(`smtp.gmail.com:587` with a Gmail app password).
+
+**If Gmail is unreachable from the Render host** (the connection can't complete
+the SMTP handshake from that network), swap the `SMTP_*` variables to any
+other SMTP provider — the backend does not depend on Gmail specifically. For
+example:
+
+- **Resend** — `SMTP_HOST=smtp.resend.com`, `SMTP_PORT=587`,
+  `SMTP_USER=resend-...@resend.dev`, `SMTP_PASS=<API key>`,
+  `EMAIL_FROM=onboarding@resend.dev` (or your verified domain).
+- **SendGrid** — `SMTP_HOST=smtp.sendgrid.net`, `SMTP_PORT=587`,
+  `SMTP_USER=apikey`, `SMTP_PASS=<SendGrid API key>`,
+  `EMAIL_FROM=<verified sender>`.
+- **Mailgun** — `SMTP_HOST=smtp.mailgun.org`, `SMTP_PORT=587`,
+  `SMTP_USER=postmaster@<sandbox or domain>`, `SMTP_PASS=<SMTP password>`,
+  `EMAIL_FROM=<verified sender>`.
+
+Whichever provider you use, verify delivery from the live service with:
+
+```bash
+npm run check-email -- you@example.com
+```
+
+The server also calls `verifyMail()` at boot and logs a loud error if SMTP is
+misconfigured, so a bad mailbox blocks the deploy from going quiet-fail.
+
 ## Google Gmail Integration
 
-The app uses the Google Gmail API with OAuth 2.0:
-1. User clicks "Connect Gmail"
-2. Redirects to Google OAuth consent screen
-3. User authorizes the app
-4. Backend receives the authorization code
-5. Backend exchanges code for access + refresh tokens
-6. Tokens stored in database for future use
-7. App can read inbox and send emails
+The app uses the Google Gmail API with Google OAuth:
+1. User clicks **Connect Gmail** in the app
+2. The backend's `/api/auth/gmail/start-session` route builds a Google consent
+   URL from `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and
+   `GOOGLE_REDIRECT_URI`, and returns it as `authUrl`
+3. The user opens `authUrl` and completes the Google consent screen
+4. Google returns an `idToken` to the client
+5. The client sends the `idToken` to `/api/auth/google/register` (first time)
+   or `/api/auth/google/login` (returning user)
+6. The backend verifies the `idToken` with `google-auth-library` and creates
+   or looks up the account, storing the OAuth tokens for Gmail API use
+7. The app can read the inbox and send emails via the Gmail API
 
 ## License
 
