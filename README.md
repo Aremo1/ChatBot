@@ -255,25 +255,46 @@ Current production origin: `https://chatbot-saxe.onrender.com`.
   a cold start can take 30-60 seconds — expected for a free instance, not a
   bug).
 - **Env variables** (set in the Render dashboard — `backend/.env` is
-  gitignored and stays local):
+  gitignored and stays local). One consolidated block:
   ```
+  # Server
   PORT=4000
   FRONTEND_URL=https://chatbot-saxe.onrender.com
+
+  # JWT (change in production)
   JWT_SECRET=<a long random secret>
-  DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASSWORD   (or leave SQLite mode
-                                                         as-is for a single
-                                                         free-tier instance)
-  ADMIN_EMAIL / ADMIN_PASSWORD / ADMIN_NAME               (so the admin account
-                                                           is bootstrapped on boot)
+
+  # Database — fill these in if you use Postgres; leave them out to use the
+  # bundled SQLite mode (fine for a single free-tier instance, but uploads and
+  # the DB are ephemeral on free tiers and reset on restart).
+  # DB_HOST=<postgres host>
+  # DB_PORT=5432
+  # DB_NAME=chatbot
+  # DB_USER=<postgres user>
+  # DB_PASSWORD=<postgres password>
+
+  # Admin bootstrap — when set, this admin account is created or updated on
+  # every server start (so someone can add users and reset passwords from the
+  # Settings -> Admin panel).
+  ADMIN_EMAIL=<admin email>
+  ADMIN_PASSWORD=<admin password>
+  ADMIN_NAME=Administrator
+
+  # Email delivery (password-reset OTPs, admin-generated passwords).
+  # Uses the Gmail app password you gave me earlier (host dashboard, not the
+  # repo). Leave SMTP_HOST empty to log emails to the console instead — in dev
+  # mode the reset code is also returned to the client.
   SMTP_HOST=smtp.gmail.com
   SMTP_PORT=587
   SMTP_SECURE=false
   SMTP_USER=<your Gmail address>
   SMTP_PASS=<your Gmail app password>
   EMAIL_FROM=<your Gmail address>
+
+  # Google OAuth (token flow — see Google OAuth callback below)
   GOOGLE_CLIENT_ID=<your Google OAuth client ID>
   GOOGLE_CLIENT_SECRET=<your Google OAuth client secret>
-  GOOGLE_REDIRECT_URI=https://chatbot-saxe.onrender.com/api/auth/google/callback
+  GOOGLE_REDIRECT_URI=https://chatbot-saxe.onrender.com
   ```
 - The server calls `verifyMail()` at boot and logs a loud error if SMTP is
   misconfigured, so a bad mailbox blocks the deploy from going quiet-fail.
@@ -325,7 +346,8 @@ Keep your localhost redirect URI authorized while developing:
 http://localhost:4000
 ```
 
-Then set these in the Render env so the backend builds the right consent URL:
+Then set these in the Render env (they're already listed in the consolidated
+block above) so the backend builds the right consent URL:
 
 ```
 GOOGLE_CLIENT_ID=<your Google OAuth client ID>
@@ -333,8 +355,9 @@ GOOGLE_CLIENT_SECRET=<your Google OAuth client secret>
 GOOGLE_REDIRECT_URI=https://chatbot-saxe.onrender.com
 ```
 
-If the authorized redirect URI and `GOOGLE_REDIRECT_URI` don't match, Google
-rejects the consent redirect with a "redirect_uri_mismatch" error.
+If the authorized redirect URI in Google Cloud Console and
+`GOOGLE_REDIRECT_URI` in Render don't match, Google rejects the consent
+redirect with a "redirect_uri_mismatch" error.
 
 ### Mobile install
 
