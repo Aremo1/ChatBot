@@ -250,6 +250,19 @@ Current production origin: `https://chatbot-saxe.onrender.com`.
   backend deps. The backend's `app.js` auto-serves `frontend/dist/` when it
   is present, so the same process serves the app at `/` and the API at
   `/api/*`.
+
+  **Troubleshooting — "Missing script: build" in workspace
+  chatbot-backend:** if the build log shows `npm error workspace
+  chatbot-backend ... Missing script: "build"`, the Render **Root
+  directory** is set to `backend/` instead of the repo root. With Root
+  directory = `backend/`, `npm run build` looks for a `build` script in
+  `backend/package.json`, which does not exist. Fix it by setting the Render
+  **Root directory** to the **repo root** (where the `package.json` with
+  `workspaces: ["backend", "frontend"]` lives) and using the build command
+  above. The repo-root `package.json` already has a `build` script
+  (`npm run build --workspace frontend`) that runs the frontend's `vite
+  build`, and `npm install` at the repo root installs both workspaces, so
+  `npm install && npm run build` at the repo root also works.
 - **Start command:** `cd backend && node src/index.js`
 - **Plan:** Free (the service sleeps after inactivity; the first request after
   a cold start can take 30-60 seconds — expected for a free instance, not a
