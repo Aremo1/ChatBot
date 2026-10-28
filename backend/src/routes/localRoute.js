@@ -9,7 +9,7 @@ const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 const { getClient } = require('../config/db-sqlite');
 const { signToken, verifyToken, publicUser } = require('../utils/auth');
-const { sendMail, canExposeOtp } = require('../utils/mailer');
+const { sendMail, canExposeOtp, htmlShell } = require('../utils/mailer');
 
 const router = express.Router();
 
@@ -260,6 +260,11 @@ router.post('/forgot-password', async (req, res) => {
           '',
           `It expires in ${OTP_TTL_MINUTES} minutes. If you did not request this, you can ignore this email.`,
         ].join('\n'),
+        html: htmlShell('Reset your password', [
+          `Hi ${r.rows[0].name || ''},`,
+          `Your 6-digit code is: <strong style="font-size:22px;letter-spacing:6px;color:#0f172a">${code}</strong>`,
+          `It expires in ${OTP_TTL_MINUTES} minutes. If you did not request this, you can ignore this email.`,
+        ]),
       });
 
       res.json({

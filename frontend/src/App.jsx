@@ -38,14 +38,8 @@ function timeLabel(value) {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function dayLabel(value) {
-  if (!value) return '';
-  const d = new Date(String(value).replace(' ', 'T') + 'Z');
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleDateString();
-}
-
 const sameId = (a, b) => String(a) === String(b);
+const isGroupChat = (chat) => Boolean(chat) && (chat.type === 'group' || Number(chat.is_group) === 1);
 
 const SMILEYS = [
   '😀', '😃', '😄', '😁', '😆', '😅', '😂', '🤣',
@@ -59,20 +53,20 @@ const SMILEYS = [
 
 const STICKERS = [
   '🎉', '🎈', '🎂', '🎁', '😺', '🐶', '🦄', '🐢',
-  '🌹', '🌈', '⭐', '🔥', '💯', '🎉', '🥳', '😎',
+  '🌹', '🌈', '⭐', '🔥', '💯', '🥳', '😎', '🥰',
 ];
 
 /* ------------------------------------------------------------------ */
 /* Small shared pieces                                                 */
 /* ------------------------------------------------------------------ */
 
-function Avatar({ name, url, size = 'w-10 h-10' }) {
+function Avatar({ name, url, size = 'w-10 h-10', group }) {
   if (url) {
-    return <img src={url} alt={name || 'user'} className={`${size} rounded-full object-cover`} />;
+    return <img src={url} alt={name || 'user'} className={`${size} rounded-full object-cover shrink-0`} />;
   }
   return (
-    <div className={`${size} rounded-full bg-primary-500 flex items-center justify-center text-white font-semibold text-sm shrink-0`}>
-      {(name || 'U').charAt(0).toUpperCase()}
+    <div className={`${size} rounded-full ${group ? 'bg-secondary-500' : 'bg-primary-500'} flex items-center justify-center text-white font-semibold text-sm shrink-0`}>
+      {group ? '👥' : (name || 'U').charAt(0).toUpperCase()}
     </div>
   );
 }
@@ -86,7 +80,7 @@ function Modal({ title, onClose, children, wide }) {
       >
         <div className="flex items-center justify-between px-6 pt-5 pb-3">
           <h2 className="text-lg font-semibold text-white">{title}</h2>
-          <button onClick={onClose} className="p-2 hover:bg-dark-700 rounded-lg" aria-label="Close">
+          <button onClick={onClose} aria-label="Close" className="p-2 hover:bg-dark-700 rounded-lg">
             <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -104,6 +98,15 @@ const primaryBtn =
   'w-full bg-primary-500 hover:bg-primary-600 text-white font-medium py-2 rounded-lg transition-colors disabled:opacity-60';
 const ghostBtn =
   'px-3 py-1.5 rounded-lg border border-dark-600 text-gray-300 hover:border-primary-500 hover:text-white transition-colors text-sm';
+
+function readAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('Could not read the file'));
+    reader.readAsDataURL(file);
+  });
+}
 
 /* ------------------------------------------------------------------ */
 /* App                                                                 */
@@ -149,13 +152,24 @@ export default function App() {
   const [input, setInput] = useState('');
   const [messageError, setMessageError] = useState('');
   const [sending, setSending] = useState(false);
+  const [attachBusy, setAttachBusy] = useState(false);
 
   // People search / add
   const [peopleOpen, setPeopleOpen] = useState(false);
+  const [peopleMode, setPeopleMode] = useState('contact'); // contact | groupMember
   const [peopleQuery, setPeopleQuery] = useState('');
   const [people, setPeople] = useState([]);
   const [peopleLoading, setPeopleLoading] = useState(false);
   const [peopleError, setPeopleError] = useState('');
+
+  // Group creation
+  const [groupOpen, setGroupOpen] = useState(false);
+  const [groupName, setGroupName] = useState('');
+  const [groupQuery, setGroupQuery] = useState('');
+  const [groupPeople, setGroupPeople] = useState([]);
+  const [groupSelected, setGroupSelected] = useState([]);
+  const [groupBusy, setGroupBusy] = useState(false);
+  const [groupError, setGroupError] = useState('');
 
   // Contact requests
   const [requestsOpen, setRequestsOpen] = useState(false);
@@ -196,6 +210,9 @@ export default function App() {
   const [onlineIds, setOnlineIds] = useState([]);
   const [typingFrom, setTypingFrom] = useState(null);
 
+  // PWA install
+  const [installPrompt, setInstallPrompt] = useState(null);
+
   const socketRef = useRef(null);
   const currentChatRef = useRef(null);
   const userRef = useRef(null);
@@ -203,10 +220,31 @@ export default function App() {
   const typingTimerRef = useRef(null);
   const typingSeenRef = useRef(0);
   const messagesEndRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   useEffect(() => { currentChatRef.current = currentChat; }, [currentChat]);
   useEffect(() => { userRef.current = user; }, [user]);
   useEffect(() => { tokenRef.current = token; }, [token]);
+
+  /* ---------------- PWA install prompt ---------------- */
+  useEffect(() => {
+    const onPrompt = (e) => {
+      e.preventDefault();
+      setInstallPrompt(e);
+    };
+    window.addEventListener('beforeinstallprompt', onPrompt);
+    return () => window.removeEventListener('beforeinstallprompt', onPrompt);
+  }, []);
+
+  const installApp = async () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    try {
+      await installPrompt.userChoice;
+    } finally {
+      setInstallPrompt(null);
+    }
+  };
 
   /* ---------------- session restore ---------------- */
   useEffect(() => {
@@ -302,6 +340,17 @@ export default function App() {
     }
   }, []);
 
+  const searchGroupPeople = useCallback(async (q, tok) => {
+    const t = tok || tokenRef.current;
+    if (!t) return;
+    try {
+      const data = await request(`/api/local/users?q=${encodeURIComponent(q || '')}`, { token: t });
+      setGroupPeople(data.users || []);
+    } catch (e) {
+      setGroupPeople([]);
+    }
+  }, []);
+
   /* ---------------- messages ---------------- */
   const loadMessages = useCallback(async (chatId, tok) => {
     const t = tok || tokenRef.current;
@@ -309,7 +358,6 @@ export default function App() {
     try {
       const data = await request(`/api/messages?chatId=${chatId}&limit=100`, { token: t });
       if (data.success) setMessages(data.messages || []);
-      // Reading the thread clears its unread badge.
       const list = data.messages || [];
       await Promise.all(
         list
@@ -330,7 +378,18 @@ export default function App() {
     setTypingFrom(null);
     loadMessages(chat.id);
     setPeopleOpen(false);
+    setGroupOpen(false);
   }, [loadMessages]);
+
+  /** Reload the chat list and re-select a chat by id (fresh fields). */
+  const refreshAndSelect = useCallback(async (chatId) => {
+    await loadChats();
+    try {
+      const fresh = await request('/api/chats', { token: tokenRef.current });
+      const chat = (fresh.chats || []).find((c) => sameId(c.id, chatId));
+      if (chat) selectChat(chat);
+    } catch (e) { /* non-fatal */ }
+  }, [loadChats, selectChat]);
 
   /* ---------------- socket ---------------- */
   useEffect(() => {
@@ -410,6 +469,17 @@ export default function App() {
     socket.on('request_accepted', () => {
       loadChats();
       loadRequests();
+    });
+
+    // Group membership changed — refresh the chat list.
+    socket.on('chat_added', () => loadChats());
+    socket.on('chat_removed', (payload) => {
+      const id = payload && payload.chatId;
+      if (currentChatRef.current && sameId(currentChatRef.current.id, id)) {
+        setCurrentChat(null);
+        setMessages([]);
+      }
+      loadChats();
     });
 
     socket.on('typing', (payload) => {
@@ -607,15 +677,22 @@ export default function App() {
   };
 
   /* ---------------- sending messages ---------------- */
-  const sendChatMessage = async (content, type = 'text') => {
-    if (!content || !content.trim() || !currentChatRef.current || sending) return;
+  const sendChatMessage = async (content, type = 'text', attachment = null) => {
+    const text = content == null ? '' : String(content).trim();
+    if (!text && !attachment) return;
+    if (!currentChatRef.current || sending) return;
     const chat = currentChatRef.current;
     setSending(true);
     try {
       const data = await request('/api/messages', {
         method: 'POST',
         token,
-        body: { chatId: chat.id, content: content.trim(), type },
+        body: {
+          chatId: chat.id,
+          content: text || (attachment ? attachment.name : ''),
+          type,
+          ...(attachment ? { attachment } : {}),
+        },
       });
       if (data.success && data.message) {
         const msg = data.message;
@@ -623,7 +700,7 @@ export default function App() {
         setChats((prev) =>
           prev.map((c) =>
             sameId(c.id, chat.id)
-              ? { ...c, last_message: type === 'sticker' ? msg.content : msg.content, updated_at: msg.created_at, unread_count: 0 }
+              ? { ...c, last_message: msg.content, updated_at: msg.created_at, unread_count: 0 }
               : c
           )
         );
@@ -650,6 +727,32 @@ export default function App() {
   const sendSticker = async (sticker) => {
     setShowPicker(false);
     await sendChatMessage(sticker, 'sticker');
+  };
+
+  const onFileSelected = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!currentChatRef.current) return;
+    setAttachBusy(true);
+    setMessageError('');
+    try {
+      const dataUrl = await readAsDataURL(file);
+      const up = await request('/api/uploads', {
+        method: 'POST',
+        token,
+        body: { file: dataUrl, name: file.name },
+      });
+      if (up.success && up.attachment) {
+        await sendChatMessage('', 'text', up.attachment);
+      } else {
+        setMessageError(up.message || 'Upload failed');
+      }
+    } catch (err) {
+      setMessageError(err.message || 'Upload failed');
+    } finally {
+      setAttachBusy(false);
+    }
   };
 
   const emitTyping = (isTyping) => {
@@ -689,9 +792,9 @@ export default function App() {
     }, 1500);
   };
 
-  /** The other participant of a chat, from this client's view. */
+  /** The other participant of a direct chat, from this client's view. */
   function otherIdOf(chat) {
-    if (!chat || !user) return null;
+    if (!chat || !user || isGroupChat(chat)) return null;
     return sameId(chat.user1_id, user.id) ? chat.user2_id : chat.user1_id;
   }
 
@@ -712,10 +815,7 @@ export default function App() {
       const data = await request(`/api/requests/${req.id}/accept`, { method: 'POST', token });
       setIncoming((prev) => prev.filter((r) => !sameId(r.id, req.id)));
       if (data.success && data.chat) {
-        await loadChats();
-        const fresh = await request('/api/chats', { token });
-        const chat = (fresh.chats || []).find((c) => sameId(c.id, data.chat.id));
-        if (chat) selectChat(chat);
+        await refreshAndSelect(data.chat.id);
       }
       setRequestsOpen(false);
     } catch (err) {
@@ -750,14 +850,87 @@ export default function App() {
         body: { userId: user.id, otherUserId: targetUserId },
       });
       if (data.success && data.chat) {
-        await loadChats();
-        const fresh = await request('/api/chats', { token });
-        const chat = (fresh.chats || []).find((c) => sameId(c.id, data.chat.id)) || data.chat;
-        selectChat(chat);
+        await refreshAndSelect(data.chat.id);
         setPeopleOpen(false);
       }
     } catch (err) {
       setPeopleError(err.message || 'Could not start a chat');
+    }
+  };
+
+  /* ---------------- groups ---------------- */
+  const openGroupModal = () => {
+    setGroupOpen(true);
+    setGroupName('');
+    setGroupQuery('');
+    setGroupSelected([]);
+    setGroupError('');
+    searchGroupPeople('');
+  };
+
+  const toggleGroupMember = (u) => {
+    setGroupSelected((prev) =>
+      prev.some((id) => sameId(id, u.id))
+        ? prev.filter((id) => !sameId(id, u.id))
+        : [...prev, u.id]
+    );
+  };
+
+  const createGroup = async (e) => {
+    e.preventDefault();
+    setGroupError('');
+    if (!groupName.trim()) {
+      setGroupError('Give the group a name');
+      return;
+    }
+    if (groupSelected.length === 0) {
+      setGroupError('Pick at least one person to add');
+      return;
+    }
+    setGroupBusy(true);
+    try {
+      const data = await request('/api/chats', {
+        method: 'POST',
+        token,
+        body: { name: groupName.trim(), memberIds: groupSelected },
+      });
+      if (data.success && data.chat) {
+        setGroupOpen(false);
+        await refreshAndSelect(data.chat.id);
+      }
+    } catch (err) {
+      setGroupError(err.message || 'Could not create the group');
+    } finally {
+      setGroupBusy(false);
+    }
+  };
+
+  const addMemberToGroup = async (userId) => {
+    if (!currentChat) return;
+    setPeopleError('');
+    try {
+      await request(`/api/chats/${currentChat.id}/members`, {
+        method: 'POST',
+        token,
+        body: { userId },
+      });
+      setPeopleOpen(false);
+      await refreshAndSelect(currentChat.id);
+    } catch (err) {
+      setPeopleError(err.message || 'Could not add this person');
+    }
+  };
+
+  const leaveGroup = async () => {
+    if (!currentChat) return;
+    if (!window.confirm(`Leave "${currentChat.other_user_name || 'this group'}"?`)) return;
+    try {
+      await request(`/api/chats/${currentChat.id}/leave`, { method: 'POST', token });
+      setCurrentChat(null);
+      setMessages([]);
+      await loadChats();
+    } catch (err) {
+      setMessageError(err.message || 'Could not leave the group');
     }
   };
 
@@ -863,12 +1036,7 @@ export default function App() {
     setSettingsError('');
     setAvatarBusy(true);
     try {
-      const dataUrl = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = () => reject(new Error('Could not read the file'));
-        reader.readAsDataURL(file);
-      });
+      const dataUrl = await readAsDataURL(file);
       const data = await request('/api/users/me/avatar', {
         method: 'POST',
         token,
@@ -925,9 +1093,11 @@ export default function App() {
     }
   };
 
-  const openPeople = () => {
+  const openPeople = (mode = 'contact') => {
     setPeopleOpen(true);
+    setPeopleMode(mode);
     setNotifOpen(false);
+    setPeopleError('');
     searchPeople('');
   };
 
@@ -945,7 +1115,7 @@ export default function App() {
   /* ---------------- signed out ---------------- */
   if (!user) {
     return (
-      <div className="flex h-screen items-center justify-center bg-dark-900 text-light-200">
+      <div className="flex h-screen items-center justify-center bg-dark-900 text-light-200 p-4">
         <div className="w-full max-w-md p-6">
           <div className="text-center">
             <h1 className="text-2xl font-bold text-white">Sign in to Chat</h1>
@@ -977,6 +1147,14 @@ export default function App() {
             >
               Forgot your password?
             </button>
+            {installPrompt && (
+              <button
+                onClick={installApp}
+                className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-lg border border-primary-500 text-primary-400 hover:bg-primary-500/10 transition-colors"
+              >
+                📲 Install the app
+              </button>
+            )}
           </div>
 
           {authError && <p className="mt-4 text-sm text-red-400 text-center">{authError}</p>}
@@ -1079,17 +1257,23 @@ export default function App() {
   /* ---------------- signed in ---------------- */
   const onlineSet = new Set(onlineIds.map(String));
   const pendingCount = incoming.length;
+  const groupChat = isGroupChat(currentChat);
 
   return (
     <div className="flex h-screen bg-dark-900 text-light-200 overflow-hidden">
-      {/* Sidebar */}
-      <div className="w-1/3 min-w-[260px] bg-dark-800 border-r border-dark-700 flex flex-col">
+      {/* Sidebar — full screen on mobile when no chat is open */}
+      <div className={`${currentChat ? 'hidden md:flex' : 'flex'} w-full md:w-1/3 min-w-0 md:min-w-[260px] bg-dark-800 border-r border-dark-700 flex-col`}>
         <div className="p-4 flex items-center gap-3 border-b border-dark-700">
           <Avatar name={user.name} url={user.avatarUrl} />
           <div className="flex-1 min-w-0">
             <h2 className="text-lg font-semibold text-white truncate">{user.name}</h2>
             <p className="text-sm text-gray-400 truncate">{user.email}</p>
           </div>
+          {installPrompt && (
+            <button onClick={installApp} title="Install app" className="p-2 hover:bg-dark-700 rounded-lg text-gray-400 hover:text-white">
+              📲
+            </button>
+          )}
           <button onClick={signOut} title="Sign out" className="p-2 hover:bg-dark-700 rounded-lg text-gray-400 hover:text-white">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
@@ -1098,9 +1282,10 @@ export default function App() {
         </div>
 
         {/* Action bar */}
-        <div className="p-3 flex items-center gap-2 border-b border-dark-700">
-          <button onClick={openPeople} className={`${ghostBtn} flex-1`}>🔍 Find people</button>
-          <button onClick={openRequests} className={`${ghostBtn} relative flex-1`}>
+        <div className="p-3 flex flex-wrap items-center gap-2 border-b border-dark-700">
+          <button onClick={() => openPeople('contact')} className={`${ghostBtn} flex-1`}>🔍 Find people</button>
+          <button onClick={openGroupModal} className={`${ghostBtn} flex-1`}>👥 New group</button>
+          <button onClick={openRequests} className={`${ghostBtn} relative`}>
             Requests
             {pendingCount > 0 && (
               <span className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5">
@@ -1118,7 +1303,7 @@ export default function App() {
           </button>
           <button onClick={openSettings} className={ghostBtn} title="Settings">⚙️</button>
           {user.role === 'admin' && (
-            <button onClick={openAdmin} className={`${ghostBtn}`} title="Admin">🛡️</button>
+            <button onClick={openAdmin} className={ghostBtn} title="Admin">🛡️</button>
           )}
         </div>
 
@@ -1141,17 +1326,18 @@ export default function App() {
 
         {/* Chat list */}
         <div className="flex-1 overflow-y-auto p-4">
-          <h3 className="text-sm font-medium text-gray-400 mb-3">Direct Messages</h3>
+          <h3 className="text-sm font-medium text-gray-400 mb-3">Conversations</h3>
           <div className="space-y-2">
             {chats.length === 0 && (
               <p className="text-sm text-gray-500">
                 No conversations yet. Use <span className="text-primary-400">Find people</span> to
-                search for a colleague and send them a request.
+                search for a colleague, or start a <span className="text-primary-400">New group</span>.
               </p>
             )}
             {chats.map((chat) => {
               const active = currentChat && sameId(currentChat.id, chat.id);
-              const isOnline = onlineSet.has(String(otherIdOf(chat)));
+              const group = isGroupChat(chat);
+              const isOnline = !group && onlineSet.has(String(otherIdOf(chat)));
               const unreadCount = Number(chat.unread_count || 0);
               return (
                 <button
@@ -1162,7 +1348,7 @@ export default function App() {
                   }`}
                 >
                   <div className="relative">
-                    <Avatar name={chat.other_user_name} url={chat.other_user_avatar} />
+                    <Avatar name={chat.other_user_name} url={chat.other_user_avatar} group={group} />
                     {isOnline && (
                       <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-dark-800 rounded-full" />
                     )}
@@ -1172,7 +1358,10 @@ export default function App() {
                       {chat.other_user_name || 'Unknown user'}
                     </p>
                     <p className="text-xs text-gray-500 truncate">
-                      {chat.last_message || (isOnline ? 'Online' : 'Offline')}
+                      {group
+                        ? `${Number(chat.member_count) || 1} members`
+                        : (chat.last_message || (isOnline ? 'Online' : 'Offline'))}
+                      {!group && chat.last_message ? '' : ''}
                     </p>
                   </div>
                   {unreadCount > 0 && (
@@ -1187,8 +1376,8 @@ export default function App() {
         </div>
       </div>
 
-      {/* Main chat area */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Main chat area — hidden on mobile until a chat is open */}
+      <div className={`${currentChat ? 'flex' : 'hidden md:flex'} flex-1 flex-col overflow-hidden min-w-0`}>
         {!currentChat ? (
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center px-6">
@@ -1201,27 +1390,47 @@ export default function App() {
           </div>
         ) : (
           <>
-            <div className="flex items-center gap-3 px-4 py-3 border-b border-dark-700 bg-dark-800">
-              <Avatar name={currentChat.other_user_name} url={currentChat.other_user_avatar} size="w-9 h-9" />
+            <div className="flex items-center gap-3 px-2 md:px-4 py-3 border-b border-dark-700 bg-dark-800">
+              <button
+                onClick={() => setCurrentChat(null)}
+                title="Back to chats"
+                className="md:hidden p-2 text-gray-400 hover:text-white"
+              >
+                ←
+              </button>
+              <Avatar name={currentChat.other_user_name} url={currentChat.other_user_avatar} group={groupChat} size="w-9 h-9" />
               <div className="flex-1 min-w-0">
                 <h2 className="text-lg font-semibold text-white truncate">{currentChat.other_user_name}</h2>
                 <p className="text-xs text-gray-400">
-                  {typingFrom
-                    ? `${typingFrom} is typing…`
-                    : onlineSet.has(String(otherIdOf(currentChat)))
-                      ? 'Online'
-                      : 'Offline'}
+                  {groupChat
+                    ? `${Number(currentChat.member_count) || (currentChat.members && currentChat.members.length) || 1} members`
+                    : typingFrom
+                      ? `${typingFrom} is typing…`
+                      : onlineSet.has(String(otherIdOf(currentChat)))
+                        ? 'Online'
+                        : 'Offline'}
                 </p>
               </div>
+              {groupChat && (
+                <>
+                  <button onClick={() => openPeople('groupMember')} className={ghostBtn} title="Add people">＋ Add</button>
+                  <button onClick={leaveGroup} className={ghostBtn} title="Leave group">Leave</button>
+                </>
+              )}
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
               {messages.length === 0 && (
-                <p className="text-center text-sm text-gray-600 pt-8">No messages yet — say hello 👋</p>
+                <p className="text-center text-sm text-gray-600 pt-8">
+                  {groupChat ? 'No messages yet — say hello to the group 👋' : 'No messages yet — say hello 👋'}
+                </p>
               )}
               {messages.map((msg) => {
                 const mine = sameId(msg.sender_id, user.id);
                 const isSticker = msg.message_type === 'sticker';
+                const hasAttachment = Boolean(msg.attachment_url);
+                const textIsJustName = hasAttachment && msg.content === msg.attachment_name;
+
                 if (isSticker) {
                   return (
                     <div key={msg.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
@@ -1236,13 +1445,31 @@ export default function App() {
                     </div>
                   );
                 }
+
+                const isImage = hasAttachment && (msg.attachment_mime || '').startsWith('image/');
                 return (
                   <div key={msg.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
                     <div className={`max-w-[70%] px-4 py-2 rounded-lg ${mine ? 'bg-primary-500 text-white rounded-br-md' : 'bg-dark-700 text-gray-200 rounded-bl-md'}`}>
                       {!mine && (
                         <p className="text-xs font-medium text-primary-300 mb-1">{msg.sender_name}</p>
                       )}
-                      <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>
+                      {hasAttachment && isImage && (
+                        <a href={API + msg.attachment_url} target="_blank" rel="noreferrer" className="block mb-1">
+                          <img src={API + msg.attachment_url} alt={msg.attachment_name || 'attachment'}
+                            className="max-h-48 rounded object-contain" loading="lazy" />
+                        </a>
+                      )}
+                      {hasAttachment && !isImage && (
+                        <a href={API + msg.attachment_url} target="_blank" rel="noreferrer"
+                          className={`inline-flex items-center gap-2 mb-1 px-2 py-1 rounded text-sm underline ${
+                            mine ? 'text-white' : 'text-primary-300'
+                          }`}>
+                          📎 {msg.attachment_name}
+                        </a>
+                      )}
+                      {msg.content && !textIsJustName && (
+                        <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>
+                      )}
                       <p className={`text-xs mt-1 flex items-center gap-2 ${mine ? 'text-primary-200' : 'text-gray-500'}`}>
                         <span>{timeLabel(msg.created_at)}</span>
                         {msg.is_edited ? <span>(edited)</span> : null}
@@ -1341,7 +1568,24 @@ export default function App() {
               </div>
             )}
 
-            <form onSubmit={sendMessage} className="flex gap-3 px-4 py-3 border-t border-dark-700 bg-dark-800">
+            <form onSubmit={sendMessage} className="flex gap-2 md:gap-3 px-2 md:px-4 py-3 border-t border-dark-700 bg-dark-800">
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/plain,text/csv,application/zip,.doc,.docx,.xls,.xlsx"
+                onChange={onFileSelected}
+                data-testid="attachment-input"
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current && fileInputRef.current.click()}
+                title="Attach a file"
+                disabled={attachBusy}
+                className="p-2 rounded-lg hover:bg-dark-700 text-xl disabled:opacity-50"
+              >
+                {attachBusy ? '⏳' : '📎'}
+              </button>
               <button
                 type="button"
                 onClick={() => setShowPicker((v) => !v)}
@@ -1355,9 +1599,9 @@ export default function App() {
                 value={input}
                 onChange={onComposerChange}
                 placeholder="Type a message…"
-                className={inputCls}
+                className={inputCls + ' min-w-0'}
               />
-              <button type="submit" className={primaryBtn + ' w-auto px-6'} disabled={!input.trim() || sending}>
+              <button type="submit" className={primaryBtn + ' w-auto px-4 md:px-6'} disabled={!input.trim() || sending}>
                 Send
               </button>
             </form>
@@ -1365,9 +1609,9 @@ export default function App() {
         )}
       </div>
 
-      {/* Find people modal */}
+      {/* Find people / add to group modal */}
       {peopleOpen && (
-        <Modal title="Find people" onClose={() => setPeopleOpen(false)}>
+        <Modal title={peopleMode === 'groupMember' ? 'Add people to the group' : 'Find people'} onClose={() => setPeopleOpen(false)}>
           <div className="relative mb-4">
             <svg className="absolute left-3 top-2.5 w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -1391,6 +1635,24 @@ export default function App() {
               <p className="text-sm text-gray-500">No users match that search.</p>
             ) : (
               people.map((u) => {
+                if (peopleMode === 'groupMember') {
+                  const currentIds = (currentChat && currentChat.members || []).map((m) => String(m.user_id));
+                  const alreadyIn = currentIds.includes(String(u.id));
+                  return (
+                    <div key={u.id} className="flex items-center gap-3 p-3 rounded-lg hover:bg-dark-700">
+                      <Avatar name={u.name} url={u.avatar_url} />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-white truncate">{u.name}</p>
+                        <p className="text-xs text-gray-500 truncate">{u.email}</p>
+                      </div>
+                      {alreadyIn ? (
+                        <span className="text-xs text-gray-500 px-2">In group</span>
+                      ) : (
+                        <button onClick={() => addMemberToGroup(u.id)} className={ghostBtn + ' border-primary-500 text-primary-400'}>＋ Add</button>
+                      )}
+                    </div>
+                  );
+                }
                 const pending = pendingIncomingFor(u);
                 return (
                   <div key={u.id} className="flex items-center gap-3 p-3 rounded-lg hover:bg-dark-700">
@@ -1416,6 +1678,79 @@ export default function App() {
               })
             )}
           </div>
+        </Modal>
+      )}
+
+      {/* New group chat modal */}
+      {groupOpen && (
+        <Modal title="New group chat" onClose={() => setGroupOpen(false)}>
+          <form onSubmit={createGroup} className="space-y-4">
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">Group name</label>
+              <input
+                type="text"
+                value={groupName}
+                onChange={(e) => setGroupName(e.target.value)}
+                className={inputCls}
+                placeholder="e.g. Marketing team"
+                maxLength={60}
+                autoFocus
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">Add people</label>
+              <input
+                type="text"
+                value={groupQuery}
+                onChange={(e) => { setGroupQuery(e.target.value); searchGroupPeople(e.target.value); }}
+                className={inputCls}
+                placeholder="Search by name or email"
+              />
+            </div>
+
+            <div className="space-y-2 max-h-48 overflow-y-auto border border-dark-600 rounded-lg p-2">
+              {groupPeople.length === 0 ? (
+                <p className="text-sm text-gray-500 p-1">No users to add.</p>
+              ) : (
+                groupPeople.map((u) => {
+                  const selected = groupSelected.some((id) => sameId(id, u.id));
+                  return (
+                    <button
+                      type="button"
+                      key={u.id}
+                      onClick={() => toggleGroupMember(u)}
+                      className={`w-full flex items-center gap-3 p-2 rounded-lg transition-colors ${
+                        selected ? 'bg-primary-500/20 border border-primary-500' : 'hover:bg-dark-700 border border-transparent'
+                      }`}
+                    >
+                      <Avatar name={u.name} url={u.avatar_url} size="w-8 h-8" />
+                      <span className="flex-1 text-left min-w-0">
+                        <span className="block text-sm font-medium text-white truncate">{u.name}</span>
+                        <span className="block text-xs text-gray-500 truncate">{u.email}</span>
+                      </span>
+                      <span className={`w-5 h-5 rounded border flex items-center justify-center text-xs ${
+                        selected ? 'bg-primary-500 border-primary-500 text-white' : 'border-dark-500'
+                      }`}>
+                        {selected ? '✓' : ''}
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+
+            <p className="text-xs text-gray-500">
+              {groupSelected.length} {groupSelected.length === 1 ? 'person' : 'people'} selected
+            </p>
+
+            {groupError && <p className="text-sm text-red-400">{groupError}</p>}
+
+            <button type="submit" className={primaryBtn} disabled={groupBusy}>
+              {groupBusy ? 'Creating…' : 'Create group'}
+            </button>
+          </form>
         </Modal>
       )}
 

@@ -55,6 +55,7 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS chats (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     type TEXT DEFAULT 'direct',
+    name TEXT,
     user1_id INTEGER NOT NULL,
     user2_id INTEGER NOT NULL,
     created_at TEXT DEFAULT (datetime('now')),
@@ -95,6 +96,16 @@ const SCHEMA = [
     created_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   )`,
+  `CREATE TABLE IF NOT EXISTS chat_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    role TEXT DEFAULT 'member',
+    joined_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(chat_id, user_id),
+    FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  )`,
   `CREATE TABLE IF NOT EXISTS gmail_tokens (
     user_id INTEGER PRIMARY KEY,
     token TEXT,
@@ -113,6 +124,8 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`,
   `CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id)`,
   `CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_chat_members_chat ON chat_members(chat_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id)`,
 ];
 
 // Columns added after the first release — applied with ALTER TABLE
@@ -127,6 +140,11 @@ const COLUMN_MIGRATIONS = [
   ['users', 'online_status', 'INTEGER DEFAULT 1'],
   ['users', 'online_visibility', `TEXT DEFAULT 'everyone'`],
   ['users', 'show_in_search', 'INTEGER DEFAULT 1'],
+  ['chats', 'name', 'TEXT'],
+  ['messages', 'attachment_url', 'TEXT'],
+  ['messages', 'attachment_name', 'TEXT'],
+  ['messages', 'attachment_mime', 'TEXT'],
+  ['messages', 'attachment_size', 'INTEGER'],
 ];
 
 async function ensureColumns(db) {

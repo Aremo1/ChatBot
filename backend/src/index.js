@@ -48,8 +48,15 @@ async function bootstrapAdmin() {
 // Initialize database
 initDb()
   .then(() => bootstrapAdmin())
-  .then(() => {
+  .then(async () => {
     console.log('✅ Database connected');
+    // Fail loudly (at boot) if SMTP is misconfigured.
+    try {
+      const { verifyMail } = require('./utils/mailer');
+      await verifyMail();
+    } catch (e) {
+      console.error('SMTP check failed:', e.message);
+    }
     server.listen(PORT, () => {
       console.log(`🚀 ChatBot server running on http://localhost:${PORT}`);
       console.log(`🔌 Socket.io ready`);

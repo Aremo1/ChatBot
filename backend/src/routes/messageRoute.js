@@ -1,15 +1,18 @@
 /**
- * Message routes (CRUD for messages)
+ * Message routes (send/list/read/edit/delete) for direct and group
+ * chats, including attachment metadata for uploaded files.
  */
 
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const { getClient } = require('../config/db-sqlite');
+const { getChat, memberIds, isMember } = require('../utils/chats');
 const { emitToUser, createNotification } = require('../utils/notify');
 
 const router = express.Router();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'chatbot-dev-secret-change-in-production';
+const MAX_CONTENT = 4000;
 
 function verifyToken(req) {
   const token = req.headers.authorization?.split(' ')[1];
@@ -21,59 +24,94 @@ function verifyToken(req) {
   }
 }
 
-// Load the participants of a chat so we know who to notify/emit to.
-async function getParticipants(client, chatId) {
-  const result = await client.query('SELECT id, user1_id, user2_id FROM chats WHERE id = $1', [chatId]);
-  return result.rows[0] || null;
+/** Validate attachment metadata (the file itself is uploaded first). */
+function sanitizeAttachment(att) {
+  if (!att) return null;
+  const url = String(att.url || '');
+  if (!url.startsWith('/uploads/attachments/')) return null;
+  return {
+    url,
+    name: String(att.name || 'attachment').slice(0, 200),
+    mime: String(att.mime || 'application/octet-stream').slice(0, 100),
+    size: Number(att.size) || 0,
+  };
 }
 
+/**
+ * Deliver a saved message to every other participant of the chat
+ * (works for both direct and group chats) and notify them.
+ */
+async function deliverToOthers(client, chat, message, sender, content) {
+  const ids = await memberIds(client, chat);
+  const senderId = String(message.sender_id);
+  const enriched = {
+    ...message,
+    sender_name: sender ? sender.name : null,
+    sender_avatar: sender ? sender.avatar_url : null,
+    senderId: message.sender_id,
+    chat_id: chat.id,
+  };
+
+  for (const id of ids) {
+    if (id === senderId) {
+      emitToUser(id, 'new_message_self', enriched);
+      continue;
+    }
+    emitToUser(id, 'new_message', enriched);
+    await createNotification(
+      id,
+      'message',
+      chat.type === 'group' ? `New message in ${chat.name}` : 'New message',
+      chat.type === 'group'
+        ? `${enriched.sender_name || 'Someone'}: ${String(content).slice(0, 60)}`
+        : `${enriched.sender_name || 'Someone'}: ${String(content).slice(0, 60)}`,
+      { chatId: chat.id, messageId: message.id }
+    );
+  }
+  return enriched;
+}
+
+// ------------------------------------------------------------------
+// Send a message
+// ------------------------------------------------------------------
 router.post('/', async (req, res) => {
   try {
     const decoded = verifyToken(req);
     if (!decoded) return res.status(401).json({ message: 'Invalid token' });
-    const { chatId, content, type = 'text' } = req.body;
-    if (!chatId || !content || !String(content).trim()) {
-      return res.status(400).json({ message: 'Missing chatId or content' });
-    }
+    const { chatId, content, type = 'text', attachment } = req.body;
+
+    const text = content == null ? '' : String(content).trim();
+    const att = sanitizeAttachment(attachment);
+    if (!chatId) return res.status(400).json({ message: 'Missing chatId' });
+    if (!text && !att) return res.status(400).json({ message: 'Message cannot be empty' });
+    if (text.length > MAX_CONTENT) return res.status(400).json({ message: 'Message is too long' });
+
     const client = await getClient();
     try {
-      const chat = await getParticipants(client, chatId);
+      const chat = await getChat(client, chatId);
       if (!chat) return res.status(404).json({ message: 'Chat not found' });
-      const isMember =
-        String(chat.user1_id) === String(decoded.id) || String(chat.user2_id) === String(decoded.id);
-      if (!isMember) return res.status(403).json({ message: 'Access denied' });
+      if (!(await isMember(client, chat, decoded.id))) {
+        return res.status(403).json({ message: 'Access denied' });
+      }
+
+      const finalType = att ? (att.mime && att.mime.startsWith('image/') ? 'image' : 'file') : type;
 
       const result = await client.query(
-        'INSERT INTO messages (chat_id, sender_id, content, message_type, is_read, created_at, updated_at) VALUES ($1, $2, $3, $4, 0, NOW(), NOW()) RETURNING *',
-        [chatId, decoded.id, String(content).trim(), type]
+        `INSERT INTO messages (chat_id, sender_id, content, message_type, is_read,
+                               attachment_url, attachment_name, attachment_mime, attachment_size,
+                               created_at, updated_at)
+         VALUES ($1, $2, $3, $4, 0, $5, $6, $7, $8, NOW(), NOW()) RETURNING *`,
+        [chat.id, decoded.id, text || att.name, finalType,
+         att ? att.url : null, att ? att.name : null,
+         att ? att.mime : null, att ? att.size : null]
       );
       const message = result.rows[0];
 
       // Keep the chat list ordered by most recent activity.
-      await client.query('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chatId]);
+      await client.query('UPDATE chats SET updated_at = NOW() WHERE id = $1', [chat.id]);
 
       const sender = await client.query('SELECT id, name, avatar_url FROM users WHERE id = $1', [decoded.id]);
-      const enriched = {
-        ...message,
-        sender_name: sender.rows[0] ? sender.rows[0].name : decoded.name,
-        sender_avatar: sender.rows[0] ? sender.rows[0].avatar_url : null,
-        senderId: message.sender_id,
-      };
-
-      // Real-time delivery to both participants (skip the sender — the
-      // sender appends the message from the HTTP response itself).
-      const otherId =
-        String(chat.user1_id) === String(decoded.id) ? chat.user2_id : chat.user1_id;
-      emitToUser(otherId, 'new_message', enriched);
-      emitToUser(decoded.id, 'new_message_self', enriched);
-
-      await createNotification(
-        otherId,
-        'message',
-        'New message',
-        `${enriched.sender_name}: ${String(content).slice(0, 60)}`,
-        { chatId: chat.id, messageId: message.id }
-      );
+      const enriched = await deliverToOthers(client, chat, message, sender.rows[0], text || att.name);
 
       res.json({ success: true, message: enriched });
     } finally {
@@ -85,6 +123,9 @@ router.post('/', async (req, res) => {
   }
 });
 
+// ------------------------------------------------------------------
+// List messages
+// ------------------------------------------------------------------
 router.get('/', async (req, res) => {
   try {
     const decoded = verifyToken(req);
@@ -95,11 +136,11 @@ router.get('/', async (req, res) => {
     if (!chatId) return res.status(400).json({ message: 'Missing chatId' });
     const client = await getClient();
     try {
-      const chat = await getParticipants(client, chatId);
+      const chat = await getChat(client, chatId);
       if (!chat) return res.status(404).json({ message: 'Chat not found' });
-      const isMember =
-        String(chat.user1_id) === String(decoded.id) || String(chat.user2_id) === String(decoded.id);
-      if (!isMember) return res.status(403).json({ message: 'Access denied' });
+      if (!(await isMember(client, chat, decoded.id))) {
+        return res.status(403).json({ message: 'Access denied' });
+      }
 
       const result = await client.query(
         `SELECT m.*, u.name AS sender_name, u.avatar_url AS sender_avatar
@@ -127,6 +168,9 @@ router.get('/', async (req, res) => {
   }
 });
 
+// ------------------------------------------------------------------
+// Mark as read
+// ------------------------------------------------------------------
 router.patch('/:messageId/read', async (req, res) => {
   try {
     const decoded = verifyToken(req);
@@ -143,8 +187,8 @@ router.patch('/:messageId/read', async (req, res) => {
       if (String(message.sender_id) === String(decoded.id)) {
         return res.json({ success: true, message, alreadyRead: true });
       }
-      const chat = await getParticipants(client, message.chat_id);
-      if (!chat || (String(chat.user1_id) !== String(decoded.id) && String(chat.user2_id) !== String(decoded.id))) {
+      const chat = await getChat(client, message.chat_id);
+      if (!chat || !(await isMember(client, chat, decoded.id))) {
         return res.status(403).json({ message: 'Access denied' });
       }
       await client.query('UPDATE messages SET is_read = 1, updated_at = NOW() WHERE id = $1', [messageId]);
@@ -195,11 +239,10 @@ router.patch('/:messageId/edit', async (req, res) => {
         [String(content).trim(), message.id]
       );
       const updated = { ...message, content: String(content).trim(), is_edited: 1 };
-      const chat = await getParticipants(client, message.chat_id);
+      const chat = await getChat(client, message.chat_id);
       if (chat) {
-        const otherId = String(chat.user1_id) === String(decoded.id) ? chat.user2_id : chat.user1_id;
-        emitToUser(otherId, 'message_edited', updated);
-        emitToUser(decoded.id, 'message_edited', updated);
+        const ids = await memberIds(client, chat);
+        for (const id of ids) emitToUser(id, 'message_edited', updated);
       }
       res.json({ success: true, message: updated });
     } finally {
@@ -212,7 +255,7 @@ router.patch('/:messageId/edit', async (req, res) => {
 });
 
 // ------------------------------------------------------------------
-// Delete a message (sender or chat member).
+// Delete a message (member of the chat).
 // ------------------------------------------------------------------
 router.delete('/:messageId', async (req, res) => {
   try {
@@ -223,16 +266,17 @@ router.delete('/:messageId', async (req, res) => {
       const found = await client.query('SELECT * FROM messages WHERE id = $1', [req.params.messageId]);
       if (found.rows.length === 0) return res.status(404).json({ message: 'Message not found' });
       const message = found.rows[0];
-      const chat = await getParticipants(client, message.chat_id);
-      const isMember = chat &&
-        (String(chat.user1_id) === String(decoded.id) || String(chat.user2_id) === String(decoded.id));
-      if (!isMember) return res.status(403).json({ message: 'Access denied' });
+      const chat = await getChat(client, message.chat_id);
+      if (!chat || !(await isMember(client, chat, decoded.id))) {
+        return res.status(403).json({ message: 'Access denied' });
+      }
 
       await client.query('DELETE FROM messages WHERE id = $1', [message.id]);
       if (chat) {
-        const otherId = String(chat.user1_id) === String(decoded.id) ? chat.user2_id : chat.user1_id;
-        emitToUser(otherId, 'message_deleted', { messageId: message.id, chatId: message.chat_id });
-        emitToUser(decoded.id, 'message_deleted', { messageId: message.id, chatId: message.chat_id });
+        const ids = await memberIds(client, chat);
+        for (const id of ids) {
+          emitToUser(id, 'message_deleted', { messageId: message.id, chatId: message.chat_id });
+        }
       }
       res.json({ success: true, message: { ...message, deleted: true } });
     } finally {

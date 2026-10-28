@@ -1,5 +1,7 @@
 # Rhosam ChatBot
 
+[![Tests](https://github.com/Aremo1/ChatBot/actions/workflows/test.yml/badge.svg)](https://github.com/Aremo1/ChatBot/actions/workflows/test.yml)
+
 A real-time chat application built with **React + Vite** frontend and **Node.js + Express + Socket.IO** backend, with **Google OAuth** sign-in and **Gmail API** integration.
 
 ## Features
@@ -10,8 +12,11 @@ A real-time chat application built with **React + Vite** frontend and **Node.js 
 - **People search & manual add** — search colleagues by name/email and send a contact request
 - **Contact requests** — accept or decline requests; accepting opens a direct chat, both sides get real-time events
 - **Notifications** — persisted inbox with unread badge (requests, accepts, new messages) and mark-as-read
+- **Group chats** — create a named group, add people from search, members get notified in real time, anyone can leave
+- **Message attachments** — images, PDF, TXT, CSV, ZIP, DOCX, XLSX up to 3 MB, rendered inline as images or download chips
 - **Real-time messaging** via Socket.IO with read receipts, edit & delete, typing indicators
 - **Smileys & stickers** — emoji picker plus big sticker messages
+- **Mobile-friendly & installable (PWA)** — responsive layout and install-to-homescreen via web app manifest + service worker
 - **Presence** with privacy controls — turn your online status off entirely, or limit who sees it (everyone / contacts / nobody) and whether you appear in people search
 - **Profile picture upload** (PNG/JPEG/WebP/GIF up to 2 MB)
 - **Gmail API integration** (read inbox, send emails, connect to Gmail)
@@ -148,8 +153,11 @@ The frontend will be available at `http://localhost:5173` and the backend at `ht
 | GET | `/api/notifications` | List notifications + unread count |
 | POST | `/api/notifications/read` | Mark notifications as read |
 | GET | `/api/chats` | Get all chats (with unread counts) |
-| GET | `/api/chats/:chatId` | Get chat with messages |
-| POST | `/api/chats` | Create a chat |
+| GET | `/api/chats/:chatId` | Get chat with messages (groups include members) |
+| POST | `/api/chats` | Create a direct chat (`userId`+`otherUserId`) or a group (`name`+`memberIds`) |
+| POST | `/api/chats/:chatId/members` | Add someone to a group |
+| POST | `/api/chats/:chatId/leave` | Leave a group |
+| POST | `/api/uploads` | Upload an attachment (data URL) → `/uploads/...` URL |
 | POST | `/api/messages` | Send a message |
 | GET | `/api/messages` | Get messages |
 | PATCH | `/api/messages/:messageId/read` | Mark message as read |
@@ -199,6 +207,26 @@ npm run test:e2e
 # Both
 npm test
 ```
+
+GitHub Actions runs both suites on every push (`.github/workflows/test.yml`).
+
+## Email (password-reset codes)
+
+Set `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` and `EMAIL_FROM` in
+`backend/.env`, then verify delivery with:
+
+```bash
+npm run check-email -- you@example.com
+```
+
+Without SMTP, emails are logged to the console and the OTP is shown in the
+UI (dev mode only).
+
+## Mobile
+
+The UI is responsive (chat list and conversation swap on small screens)
+and installable: open the app in the browser and use **Install app** (or
+the browser's *Add to Home Screen*).
 
 ## Google Gmail Integration
 

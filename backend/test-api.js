@@ -556,6 +556,151 @@ async function main() {
     stickerList.body.messages.some((m) => m.message_type === 'sticker' && m.content === '🎉'));
 
   // ----------------------------------------------------------------
+  section('Group chats');
+  const groupRes = await api('POST', '/api/chats', {
+    token: aliceToken2,
+    body: { name: 'E2E Group', memberIds: [bobId] },
+  });
+  check('group created',
+    groupRes.status === 200 && groupRes.body.chat && groupRes.body.chat.type === 'group');
+  const groupId = groupRes.body && groupRes.body.chat && groupRes.body.chat.id;
+
+  const aGroupList = await api('GET', '/api/chats', { token: aliceToken2 });
+  const aGroup = (aGroupList.body.chats || []).find((c) => String(c.id) === String(groupId));
+  check('group listed with its title',
+    aGroup && aGroup.other_user_name === 'E2E Group' && Number(aGroup.member_count) === 2);
+
+  const bGroupList = await api('GET', '/api/chats', { token: bobToken });
+  check('group listed for member B',
+    (bGroupList.body.chats || []).some((c) => String(c.id) === String(groupId)));
+
+  const carolSeesGroup = await api('GET', `/api/chats/${groupId}`, { token: carolToken });
+  check('outsider cannot open the group', carolSeesGroup.status === 404);
+
+  const carolPost = await api('POST', '/api/messages', {
+    token: carolToken,
+    body: { chatId: groupId, content: 'intruder' },
+  });
+  check('outsider cannot post to the group', carolPost.status === 403);
+
+  const bGroupMsg = waitFor(bobSocket, 'new_message');
+  const groupMsg = await api('POST', '/api/messages', {
+    token: aliceToken2,
+    body: { chatId: groupId, content: 'Hello group' },
+  });
+  check('group message sent', groupMsg.status === 200 && groupMsg.body.success);
+  const gotGroupMsg = await bGroupMsg;
+  check('group message delivered to member B', gotGroupMsg && gotGroupMsg.content === 'Hello group');
+
+  const groupDetail = await api('GET', `/api/chats/${groupId}`, { token: bobToken });
+  check('group detail returns members and messages',
+    groupDetail.status === 200 &&
+    Array.isArray(groupDetail.body.chat.members) && groupDetail.body.chat.members.length === 2 &&
+    groupDetail.body.messages.some((m) => m.content === 'Hello group'));
+
+  const addCarol = await api('POST', `/api/chats/${groupId}/members`, {
+    token: aliceToken2,
+    body: { userId: carolId },
+  });
+  check('member can be added to the group', addCarol.status === 200 && addCarol.body.member_count === 3);
+
+  const addCarolAgain = await api('POST', `/api/chats/${groupId}/members`, {
+    token: aliceToken2,
+    body: { userId: carolId },
+  });
+  check('duplicate member rejected with 409', addCarolAgain.status === 409);
+
+  const carolListAfter = await api('GET', '/api/chats', { token: carolToken });
+  check('added member now sees the group',
+    (carolListAfter.body.chats || []).some((c) => String(c.id) === String(groupId)));
+
+  const carolGroupPost = await api('POST', '/api/messages', {
+    token: carolToken,
+    body: { chatId: groupId, content: 'Hi all' },
+  });
+  check('added member can post', carolGroupPost.status === 200);
+
+  const leave = await api('POST', `/api/chats/${groupId}/leave`, { token: carolToken });
+  check('member can leave the group', leave.status === 200 && leave.body.success);
+
+  const carolPostAfterLeave = await api('POST', '/api/messages', {
+    token: carolToken,
+    body: { chatId: groupId, content: 'still here?' },
+  });
+  check('member cannot post after leaving', carolPostAfterLeave.status === 403);
+
+  const addDirect = await api('POST', `/api/chats/${chatId}/members`, {
+    token: aliceToken2,
+    body: { userId: carolId },
+  });
+  check('cannot add members to a direct chat', addDirect.status === 400);
+
+  const badGroup = await api('POST', '/api/chats', {
+    token: aliceToken2,
+    body: { name: '', memberIds: [bobId] },
+  });
+  check('group without a name rejected', badGroup.status === 400);
+
+  // ----------------------------------------------------------------
+  section('Message attachments');
+  const upload = await api('POST', '/api/uploads', {
+    token: aliceToken2,
+    body: { file: 'data:image/png;base64,' + png1x1, name: 'pixel.png' },
+  });
+  check('attachment uploads',
+    upload.status === 200 && upload.body.attachment && upload.body.attachment.url);
+
+  const uploadedUrl = upload.body && upload.body.attachment && upload.body.attachment.url;
+  if (uploadedUrl) {
+    const served = await fetch(BASE + uploadedUrl);
+    check('attachment is served statically',
+      served.status === 200 && (served.headers.get('content-type') || '').includes('image'));
+  } else {
+    check('attachment is served statically', false, 'no url');
+  }
+
+  const badUpload = await api('POST', '/api/uploads', {
+    token: aliceToken2,
+    body: { file: 'data:application/x-msdownload;base64,AAAA', name: 'evil.exe' },
+  });
+  check('disallowed file type rejected', badUpload.status === 400);
+
+  const bigUpload = await api('POST', '/api/uploads', {
+    token: aliceToken2,
+    body: {
+      file: 'data:image/png;base64,' + 'A'.repeat(45 * 1024 * 1024),
+      name: 'big.png',
+    },
+  });
+  check('oversized upload rejected', bigUpload.status === 400 || bigUpload.status === 413);
+
+  const noAuthUpload = await api('POST', '/api/uploads', {
+    body: { file: 'data:image/png;base64,' + png1x1, name: 'pixel.png' },
+  });
+  check('upload requires auth', noAuthUpload.status === 401);
+
+  const msgWithAtt = await api('POST', '/api/messages', {
+    token: aliceToken2,
+    body: { chatId, content: '', attachment: upload.body.attachment },
+  });
+  check('message with attachment stored as image',
+    msgWithAtt.status === 200 &&
+    msgWithAtt.body.message.attachment_url === uploadedUrl &&
+    msgWithAtt.body.message.message_type === 'image' &&
+    msgWithAtt.body.message.content === 'pixel.png');
+
+  const spoofed = await api('POST', '/api/messages', {
+    token: aliceToken2,
+    body: {
+      chatId,
+      content: 'harmless',
+      attachment: { url: '/etc/passwd', name: 'x', mime: 'text/plain', size: 1 },
+    },
+  });
+  check('attachment URLs outside uploads are ignored',
+    spoofed.status === 200 && spoofed.body.message.attachment_url === null);
+
+  // ----------------------------------------------------------------
   section('Invalid input handling');
   const noChatMsg = await api('POST', '/api/messages', {
     token: aliceToken2,

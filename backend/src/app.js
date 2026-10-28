@@ -33,6 +33,7 @@ app.use('/api/gmail', require('./routes/gmailRoute'));
 app.use('/api/requests', require('./routes/requestRoute'));
 app.use('/api/notifications', require('./routes/notificationRoute'));
 app.use('/api/admin', require('./routes/adminRoute'));
+app.use('/api/uploads', require('./routes/uploadRoute'));
 
 // Health check
 app.get('/health', (req, res) => {

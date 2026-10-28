@@ -28,11 +28,34 @@ const FRONTEND_PORT = 5399;
 const BACKEND = `http://localhost:${BACKEND_PORT}`;
 const FRONTEND = `http://localhost:${FRONTEND_PORT}`;
 
-const CHROME =
-  process.env.CHROME_PATH ||
-  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+function findChrome() {
+  if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
+  const candidates =
+    process.platform === 'win32'
+      ? [
+          'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+          'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+        ]
+      : process.platform === 'darwin'
+        ? ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome']
+        : [
+            '/usr/bin/google-chrome',
+            '/usr/bin/google-chrome-stable',
+            '/usr/bin/chromium',
+            '/usr/bin/chromium-browser',
+          ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  throw new Error(
+    'Chrome not found. Set CHROME_PATH to a Chrome/Chromium binary.'
+  );
+}
+
+const CHROME = findChrome();
 
 const stamp = Date.now().toString(36);
+const PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 const ADMIN_EMAIL = `admin-${stamp}@example.com`;
 const ADMIN_PASSWORD = 'adminpass123';
 const USER_A = `alice-${stamp}@example.com`;
@@ -137,13 +160,20 @@ function api(method, p, body) {
 }
 
 function killByPort(port) {
+  // Cross-platform: parse netstat output and force-kill the holder.
   try {
     const out = require('child_process')
-      .execSync(`netstat -ano | findstr :${port} | findstr LISTENING`, { shell: 'cmd.exe' })
+      .execSync(`netstat -ano | grep -i ":${port}" | grep LISTENING`, {
+        shell: process.platform === 'win32' ? 'bash.exe' : '/bin/bash',
+      })
       .toString();
     const pid = out.split(/\r?\n/)[0].trim().split(/\s+/).pop();
     if (pid && /^\d+$/.test(pid)) {
-      require('child_process').execSync(`taskkill /PID ${pid} /F`, { shell: 'cmd.exe' });
+      if (process.platform === 'win32') {
+        require('child_process').execSync(`taskkill //PID ${pid} //F`, { shell: 'bash.exe' });
+      } else {
+        require('child_process').execSync(`kill -9 ${pid}`);
+      }
     }
   } catch (e) {
     // Nothing listening — fine.
@@ -252,7 +282,7 @@ async function main() {
     await typeInto(pageA, 'input[placeholder="you@example.com"]', USER_A);
     await typeInto(pageA, 'input[placeholder="At least 8 characters"]', PW);
     await clickByText(pageA, 'button[type=submit]', 'Create account');
-    await waitForText(pageA, 'Direct Messages');
+    await waitForText(pageA, 'Conversations');
     await waitForText(pageA, 'E2E Alice');
     check('sign-up lands in the app', true);
     const storedToken = await pageA.evaluate(() => localStorage.getItem('rhosam.token'));
@@ -271,7 +301,7 @@ async function main() {
     await typeInto(pageA, 'input[placeholder="you@example.com"]', USER_A);
     await typeInto(pageA, 'input[placeholder="At least 8 characters"]', PW);
     await clickByText(pageA, 'button[type=submit]', 'Sign in');
-    await waitForText(pageA, 'Direct Messages');
+    await waitForText(pageA, 'Conversations');
     check('sign-in returns to the app', true);
 
     // Wrong password is rejected in the modal
@@ -286,7 +316,7 @@ async function main() {
     check('wrong password shows an error', true);
     await typeInto(pageA, 'input[placeholder="At least 8 characters"]', PW);
     await clickByText(pageA, 'button[type=submit]', 'Sign in');
-    await waitForText(pageA, 'Direct Messages');
+    await waitForText(pageA, 'Conversations');
 
     // --------------------------------------------------------------
     section('Create user B via API, then search + add from the UI');
@@ -430,6 +460,49 @@ async function main() {
     check('sticker arrives in real time for B', true);
 
     // --------------------------------------------------------------
+    section('Group chats');
+    await clickByText(pageA, 'button', 'New group');
+    await pageA.waitForSelector('input[placeholder="e.g. Marketing team"]');
+    await typeInto(pageA, 'input[placeholder="e.g. Marketing team"]', 'E2E Group');
+    await typeInto(pageA, 'input[placeholder="Search by name or email"]', 'E2E Bob');
+    await waitForText(pageA, 'E2E Bob');
+    const picked = await pageA.evaluate(() => {
+      const rows = [...document.querySelectorAll('button[type="button"]')]
+        .filter((b) => b.textContent.includes('E2E Bob') && b.textContent.includes('@'));
+      if (!rows.length) return false;
+      rows[0].click();
+      return true;
+    });
+    check('group member picked from search', picked);
+    await waitForText(pageA, '1 person selected');
+    await clickByText(pageA, 'button[type=submit]', 'Create group');
+    await waitForText(pageA, '2 members');
+    check('group created and opened', true);
+
+    await typeInto(pageA, 'input[placeholder="Type a message…"]', 'Hello group');
+    await clickByText(pageA, 'button[type=submit]', 'Send');
+    await waitForText(pageA, 'Hello group');
+    check('group message renders for A', true);
+
+    await waitForText(pageB, 'E2E Group');
+    check('group appears for B in real time', true);
+    await clickByText(pageB, 'button', 'E2E Group');
+    await waitForText(pageB, 'Hello group');
+    check('B opens the group and reads the message', true);
+
+    // --------------------------------------------------------------
+    section('Message attachments');
+    const pngPath = path.join(os.tmpdir(), `rhosam-e2e-${stamp}.png`);
+    fs.writeFileSync(pngPath, Buffer.from(PNG_1X1, 'base64'));
+    const fileInput = await pageA.$('input[data-testid="attachment-input"]');
+    check('attachment picker exists', Boolean(fileInput));
+    await fileInput.uploadFile(pngPath);
+    await pageA.waitForSelector('img[src*="/uploads/attachments/"]', { timeout: 20000 });
+    check('attachment image renders for A', true);
+    await pageB.waitForSelector('img[src*="/uploads/attachments/"]', { timeout: 20000 });
+    check('attachment arrives for B in real time', true);
+
+    // --------------------------------------------------------------
     section('Settings: privacy controls');
     await clickSelector(pageA, 'button[title="Settings"]');
     await waitForText(pageA, 'Who can see');
@@ -497,7 +570,7 @@ async function main() {
     await waitForText(pageA, 'Sign in');
     await typeInto(pageA, 'input[placeholder="At least 8 characters"]', 'brandnewpass1');
     await clickByText(pageA, 'button[type=submit]', 'Sign in');
-    await waitForText(pageA, 'Direct Messages');
+    await waitForText(pageA, 'Conversations');
     check('sign-in works with the reset password', true);
 
     // --------------------------------------------------------------
@@ -509,7 +582,7 @@ async function main() {
     await typeInto(pageA, 'input[placeholder="you@example.com"]', ADMIN_EMAIL);
     await typeInto(pageA, 'input[placeholder="At least 8 characters"]', ADMIN_PASSWORD);
     await clickByText(pageA, 'button[type=submit]', 'Sign in');
-    await waitForText(pageA, 'Direct Messages');
+    await waitForText(pageA, 'Conversations');
     check('admin signed in', true);
 
     const adminBtn = await pageA.evaluate(() => {
@@ -562,6 +635,31 @@ async function main() {
     await waitForText(pageC, 'E2E Bob');
     const cAdminBtn = await pageC.evaluate(() => Boolean(document.querySelector('button[title="Admin"]')));
     check('non-admin does not see the admin button', !cAdminBtn);
+
+    // --------------------------------------------------------------
+    section('Mobile layout & PWA');
+    await pageC.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
+    await new Promise((r) => setTimeout(r, 300));
+    const mobileText = await pageC.evaluate(() => document.body.innerText);
+    check('mobile hides the empty chat pane', !mobileText.includes('Select a conversation'));
+    check('mobile shows the conversation list', mobileText.includes('Conversations'));
+
+    await clickByText(pageC, 'button', 'E2E Group');
+    await waitForText(pageC, '2 members');
+    const afterOpen = await pageC.evaluate(() => document.body.innerText);
+    check('mobile opens the chat full-screen', !afterOpen.includes('Conversations'));
+    check('mobile has a back button',
+      await pageC.evaluate(() => [...document.querySelectorAll('button')].some((b) => b.textContent.trim() === '←')));
+
+    check('web app manifest linked',
+      await pageC.evaluate(() => Boolean(document.querySelector('link[rel="manifest"]'))));
+    const swReady = await pageC.evaluate(async () => {
+      const reg = await navigator.serviceWorker.getRegistration();
+      return Boolean(reg);
+    });
+    check('service worker registered (installable)', swReady);
+    const iconOk = await pageC.evaluate(() => Boolean(document.querySelector('link[rel="apple-touch-icon"]')));
+    check('install icons present', iconOk);
     await contextC.close();
 
     // --------------------------------------------------------------
