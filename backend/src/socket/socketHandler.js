@@ -241,6 +241,19 @@ function setupSocketHandlers(io) {
       io.emit('message_read', { messageId, chatId });
     });
 
+    // Group member left — inform every remaining member that the group
+    // is still there. The socket that fired the leave event should keep
+    // the group (it may be the last member), so we broadcast to the
+    // room via the Socket.IO adapter and skip the sender socket.
+    socket.on('chat_removed', (payload) => {
+      const id = payload && payload.chatId;
+      if (!id) return;
+      for (const memberId of Object.keys(io.sockets.adapter.rooms.get(id) || {})) {
+        if (memberId === socket.id) continue;
+        io.to('user_' + memberId).emit('chat_removed', { chatId: id });
+      }
+    });
+
     // User leaving (explicit, e.g. sign-out).
     socket.on('user_left', async (userId) => {
       if (userId == null) return;
