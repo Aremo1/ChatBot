@@ -132,7 +132,8 @@ router.post('/gmail/start-session', async (req, res) => {
     const authUrl = oauth2Client.generateAuthUrl({ access_type: 'offline', scope: scope.split(' '), prompt: 'consent', include_granted_scopes: false });
     const client = await getClient();
     try {
-    const result = await client.query("INSERT INTO users (email, password_hash, name, provider, google_id, is_active, created_at, updated_at) VALUES ($1, $2, $3, 'google_oauth', $4, 1, NOW(), NOW()) ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name, provider = 'google_oauth', google_id = COALESCE(users.google_id, EXCLUDED.google_id), updated_at = NOW() RETURNING id, email, name, avatar_url", [email, bcrypt.hash(randomSecret(), 10), email, email]);
+    const localId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    const result = await client.query("INSERT INTO users (local_id, email, password_hash, name, provider, google_id, is_active, created_at, updated_at) VALUES ($1, $2, $3, $4, 'google_oauth', $5, 1, NOW(), NOW()) ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name, provider = 'google_oauth', google_id = COALESCE(users.google_id, EXCLUDED.google_id), updated_at = NOW() RETURNING id, email, name, avatar_url", [localId, email, bcrypt.hash(randomSecret(), 10), email, email]);
     res.json({ success: true, authUrl, sessionId: result.rows[0].id, message: 'Please complete Google OAuth in your browser' });
     } finally {
       client.release();
