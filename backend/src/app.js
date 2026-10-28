@@ -49,6 +49,20 @@ app.use('/api', (req, res) => {
   res.status(404).json({ message: 'Not found' });
 });
 
+// Serve the built frontend from the same origin when it exists (production
+// single-origin deploy). The Vite build outputs into frontend/dist/; when that
+// directory is present, serve it so / serves the app and /api/* still hits the
+// backend. When it is absent (local dev), leave this uncommented line out and
+// run the frontend separately.
+const frontendDist = require('path').join(__dirname, '..', 'frontend', 'dist');
+const fs = require('fs');
+if (fs.existsSync(frontendDist)) {
+  // Catch-all: serve the SPA for any non-API path that isn't already handled.
+  app.get('*', express.static(frontendDist, { index: false }), (req, res) => {
+    res.sendFile(require('path').join(frontendDist, 'index.html'));
+  });
+}
+
 // Create HTTP server and Socket.IO
 const server = http.createServer(app);
 const io = new Server(server, {

@@ -230,68 +230,91 @@ the browser's *Add to Home Screen*).
 
 ## Deployment
 
-The app is two separate deploys that talk to each other over HTTPS + Socket.IO:
+This app runs from a single origin — the same HTTPS host serves both the
+backend API (and Socket.IO) and the built frontend, so the PWA can be
+installed and the Socket.IO client reaches the backend without any
+cross-origin setup.
 
-- **Frontend** — a static Vite build, served from Vercel (or any static host).
-- **Backend** — a Node/Express/Socket.IO service, served from Render, Railway, or any host that can run `node src/index.js`.
+Current production origin: `https://chatbot-saxe.onrender.com`.
 
-They share a single public URL so the PWA can be installed and the Socket.IO
-client can reach the real backend:
+### Backend + frontend (single Render web service)
 
-1. Deploy the backend first and note its public URL, e.g.
-   `https://chat-api.rhosam.tech`.
-2. Deploy the frontend, set the Vite env variables on the host (not in the
-   repo), and point both at that same backend URL:
-   ```bash
-   VITE_API_URL=https://chat-api.rhosam.tech
-   VITE_SOCKET_URL=https://chat-api.rhosam.tech
-   ```
-   Both variables must use the same value; the REST `fetch` calls and the
-   Socket.IO client both read from them, so a mismatch makes the app connect
-   to the wrong origin.
-
-### Backend (Render / Railway)
-
-- Build command: `cd backend && npm install`
-- Start command: `cd backend && node src/index.js`
-- Set these env variables in the host dashboard (not in the repo —
-  `backend/.env` is gitignored):
+- Connect the `Aremo1/ChatBot` repo to a Render **Web service**.
+- **Root directory:** leave it at the repo root (not `backend/`) — the service
+  now builds and serves both the frontend and the backend.
+- **Build command:**
+  ```bash
+  cd frontend && npm install && npm run build && cd ../backend && npm install
+  ```
+  This builds the Vite frontend into `frontend/dist/` and installs the
+  backend deps. The backend's `app.js` auto-serves `frontend/dist/` when it
+  is present, so the same process serves the app at `/` and the API at
+  `/api/*`.
+- **Start command:** `cd backend && node src/index.js`
+- **Plan:** Free (the service sleeps after inactivity; the first request after
+  a cold start can take 30-60 seconds — expected for a free instance, not a
+  bug).
+- **Env variables** (set in the Render dashboard — `backend/.env` is
+  gitignored and stays local):
   ```
   PORT=4000
-  FRONTEND_URL=https://chat.rhosam.tech
+  FRONTEND_URL=https://chatbot-saxe.onrender.com
   JWT_SECRET=<a long random secret>
   DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASSWORD   (or leave SQLite mode
                                                          as-is for a single
                                                          free-tier instance)
   ADMIN_EMAIL / ADMIN_PASSWORD / ADMIN_NAME               (so the admin account
                                                            is bootstrapped on boot)
-  SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS / EMAIL_FROM
+  SMTP_HOST=smtp.gmail.com
+  SMTP_PORT=587
+  SMTP_SECURE=false
+  SMTP_USER=<your Gmail address>
+  SMTP_PASS=<your Gmail app password>
+  EMAIL_FROM=<your Gmail address>
+  GOOGLE_CLIENT_ID=<your Google OAuth client ID>
+  GOOGLE_CLIENT_SECRET=<your Google OAuth client secret>
+  GOOGLE_REDIRECT_URI=https://chatbot-saxe.onrender.com/api/auth/google/callback
   ```
 - The server calls `verifyMail()` at boot and logs a loud error if SMTP is
   misconfigured, so a bad mailbox blocks the deploy from going quiet-fail.
-- Free-tier hosts usually spin the service down after inactivity. The first
-  real request after a cold start can take 30-60 seconds; that is expected for
-  a free instance, not a bug.
 
-### Frontend (Vercel)
+### Env variables baked into the frontend build
 
-- Framework preset: **Vite**.
-- Root directory: `frontend`.
-- Build command: `npm run build` (runs inside `frontend/`).
-- Output directory: `dist/`.
-- Env variables to add in Vercel (prefixed with `VITE_` so Vite bakes them
-  into the build):
-  ```
-  VITE_API_URL=https://chat-api.rhosam.tech
-  VITE_SOCKET_URL=https://chat-api.rhosam.tech
-  ```
-- Add your production domain as a redirect URI in Google Cloud Console once the
-  backend is live, e.g. `https://chat-api.rhosam.tech/api/auth/google/callback`,
-  and update `GOOGLE_REDIRECT_URI` in the backend env.
+The frontend reads `VITE_API_URL` and `VITE_SOCKET_URL` at build time. For
+this same-origin deploy both are the same origin as the backend, so set them
+to:
+
+```bash
+VITE_API_URL=https://chatbot-saxe.onrender.com
+VITE_SOCKET_URL=https://chatbot-saxe.onrender.com
+```
+
+If you build the frontend locally and copy `frontend/dist/` into the repo, set
+those two variables in the environment **before** running `npm run build` in
+`frontend/`. If Render builds the frontend as part of the service build command
+above, add `VITE_API_URL` and `VITE_SOCKET_URL` as Render build-time env
+variables (they're baked into the JS at build time, so the runtime `backend/`
+`.env` does not reach them).
+
+### Google OAuth callback
+
+Once the service is live, add the production callback URI to your Google Cloud
+Console OAuth client:
+
+```
+https://chatbot-saxe.onrender.com/api/auth/google/callback
+```
+
+Keep your localhost callback (`http://localhost:4000/api/auth/google/callback`)
+while developing. Then set `GOOGLE_REDIRECT_URI` in the Render env to the same
+production URI so the backend sends the right redirect to Google during the
+OAuth flow. The backend route that consumes it is
+`/api/auth/google/callback` (`backend/src/routes/authRoute.js`), so the path
+must be exactly that.
 
 ### Mobile install
 
-Once both are live, open the frontend URL on a phone or desktop. The **Install
+Open `https://chatbot-saxe.onrender.com` on a phone or desktop. The **Install
 app** button (or the browser's *Add to Home Screen*) installs the PWA; the
 manifest and service worker are already in `frontend/public/`, so no extra
 build step is needed beyond the env variables above.
