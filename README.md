@@ -296,21 +296,45 @@ above, add `VITE_API_URL` and `VITE_SOCKET_URL` as Render build-time env
 variables (they're baked into the JS at build time, so the runtime `backend/`
 `.env` does not reach them).
 
-### Google OAuth callback
+### Google OAuth callback (redirect URI)
 
-Once the service is live, add the production callback URI to your Google Cloud
-Console OAuth client:
+This app uses the Google OAuth **token flow**, not a server-side callback
+endpoint: the backend's `/gmail/start-session` route builds a Google consent
+URL using `GOOGLE_REDIRECT_URI`, the user completes consent in the browser,
+then the client sends the resulting `idToken` back to `/api/auth/google/register`
+or `/api/auth/google/login`. (`backend/src/routes/authRoute.js`)
+
+`GOOGLE_REDIRECT_URI` is passed straight into `google-auth-library`'s
+`OAuth2Client` at boot, so it must be an **authorized redirect URI** in your
+Google Cloud Console OAuth client.
+
+Once the service is live, add the production redirect URI to your Google Cloud
+Console OAuth client's **Authorized redirect URIs**:
 
 ```
-https://chatbot-saxe.onrender.com/api/auth/google/callback
+https://chatbot-saxe.onrender.com
 ```
 
-Keep your localhost callback (`http://localhost:4000/api/auth/google/callback`)
-while developing. Then set `GOOGLE_REDIRECT_URI` in the Render env to the same
-production URI so the backend sends the right redirect to Google during the
-OAuth flow. The backend route that consumes it is
-`/api/auth/google/callback` (`backend/src/routes/authRoute.js`), so the path
-must be exactly that.
+(You can also add the exact path the library sends — Google accepts the
+registered origin; the library constructs the full redirect from
+`GOOGLE_REDIRECT_URI`.)
+
+Keep your localhost redirect URI authorized while developing:
+
+```
+http://localhost:4000
+```
+
+Then set these in the Render env so the backend builds the right consent URL:
+
+```
+GOOGLE_CLIENT_ID=<your Google OAuth client ID>
+GOOGLE_CLIENT_SECRET=<your Google OAuth client secret>
+GOOGLE_REDIRECT_URI=https://chatbot-saxe.onrender.com
+```
+
+If the authorized redirect URI and `GOOGLE_REDIRECT_URI` don't match, Google
+rejects the consent redirect with a "redirect_uri_mismatch" error.
 
 ### Mobile install
 
