@@ -129,7 +129,7 @@ router.post('/gmail/refresh-token', async (req, res) => {
 router.post('/gmail/start-session', async (req, res) => {
   try {
     const { email, scope = 'https://www.googleapis.com/auth/gmail.modify' } = req.body;
-    const authUrl = oauth2Client.generateAuthUrl({ access_type: 'offline', scope: scope.split(' '), prompt: 'consent', include_granted_scopes: false });
+    const authUrl = oauth2Client.generateAuthUrl({ access_type: 'offline', response_type: 'code', scope: scope.split(' ').join(','), prompt: 'consent', include_granted_scopes: false });
     const client = await getClient();
     try {
     const localId = Math.random().toString(36).slice(2) + Date.now().toString(36);
